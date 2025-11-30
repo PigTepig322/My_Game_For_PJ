@@ -1,10 +1,7 @@
 from pygame import color
 from ursina import *
-from ursina.shaders import basic_lighting_shader
-from random import uniform
-from ursina.shaders import lit_with_shadows_shader
 from ursina import lerp_angle
-
+from random import uniform
 
 app = Ursina()
 
@@ -19,25 +16,12 @@ CAM_HEIGHT = 2
 MOUSE_SENS = 800
 
 Sky()
-ground = Entity(model='plane', scale=(500,0,500), collider='box')
-
-scene.fog_color = color.rgb(180, 200, 255)
-scene.fog_density = 0.04
-
-DirectionalLight(
-    shadows=True,
-    color=color.rgb(200, 220, 255),
-    direction=(1, -1, -1)
-)
-
-Sky(color=color.rgb(180, 200, 255))
-
-Entity.default_shader = basic_lighting_shader
+ground = Entity(model='plane', scale=(100,0,100), collider='box')
 
 class DragonBoss(Entity):
     def __init__(self, target=None, **kwargs):
         super().__init__(
-            model='dragons.glTF',
+            model='',
             scale=10,
             position=(0, 2, 50),
             collider='box',
@@ -50,25 +34,26 @@ class DragonBoss(Entity):
         self.fly_height = 15
         self.attack_cooldown = 0
         self.attack_interval = 3
-        self.animation = 'stand'
+
+        self.animation = 'stand'  # стартовая анимация
 
     def play_anim(self, name):
         try:
             self.animation = name
             print(f"▶️ Анимация: {name}")
         except Exception as e:
-            print(f"⚠️ Не удалось запустить анимацию {name}: {e}")
+            print(f"Не удалось запустить анимацию {name}: {e}")
 
     def start_fight(self):
         if not self.in_fight:
             self.in_fight = True
             self.play_anim('run')
-            print("🐉 Босс проснулся!")
+            print("Босс проснулся!")
             invoke(self.fly_up, delay=0.5)
 
     def stop_fight(self):
         if self.in_fight:
-            print("🛑 Игрок ушёл — дракон возвращается в ожидание.")
+            print("Игрок ушёл — дракон возвращается в ожидание.")
             self.in_fight = False
             self.play_anim('stand')
             self.animate_y(2, duration=2, curve=curve.in_out_sine)
@@ -81,7 +66,19 @@ class DragonBoss(Entity):
         if self.in_fight:
             self.state = 'attack'
             self.play_anim('skill01')
-            print("🔥 Дракон атакует!")
+            print("Дракон атакует!")
+
+    def update(self):
+        if not self.target:
+            return
+
+        dist = distance(self, self.target)
+        if dist <= self.trigger_radius:
+            if not self.in_fight:
+                self.start_fight()
+        else:
+            if self.in_fight:
+                self.stop_fight()
 
     def update(self):
         if not self.target:
@@ -139,7 +136,7 @@ class Fireball(Entity):
         hit_info = raycast(self.position, direction, distance=0.6, ignore=[self])
         if hit_info.hit:
             if self.target and hit_info.entity == self.target:
-                print("🔥 Игрок получил урон!")
+                print("Игрок получил урон!")
             self.explode()
             return
 
@@ -167,9 +164,7 @@ class Fireball(Entity):
             color=color.rgb(255, uniform(50, 100), 0),
             scale=1.5,
             position=self.position,
-            shader=lit_with_shadows_shader
         )
-
         explosion.animate_scale(3, duration=0.2)
         explosion.fade_out(0.3)
         destroy(explosion, delay=0.4)
@@ -177,10 +172,10 @@ class Fireball(Entity):
 
 
 player = Entity(
-    model='girl.glb',
-    scale=1,
+    model='knight.glb',
+    scale=0.035,
     origin_y=-0.9,
-    position=(0, 15, 0),
+    position=(0, 10, 0),
     collider='box'
 )
 
@@ -266,13 +261,6 @@ def input(key):
     if key == 'space' and is_grounded:
         velocity_y = JUMP_HEIGHT
 
-
-Text(
-    "WASD — движение, Q — dash, Space — прыжок, мышь — камера, Esc — выход",
-    position=(-0.85, 0.45),
-    scale=1.1
-)
-
 dragon = DragonBoss(target = player, trigger_radius=50)
 
 snowflakes = []
@@ -300,4 +288,54 @@ def update_snow():
             flake.x = uniform(-20, 20)
             flake.z = uniform(-20, 20)
 
+def update():
+    global yaw, pitch, is_dashing, dash_time, dash_cooldown, dash_dir, move
+    global velocity_y, is_grounded
+
+    dt = time.dt
+
+    update_snow()
+
+    if mouse.locked:
+        yaw += mouse.velocity[0] * MOUSE_SENS * dt
+        pitch -= mouse.velocity[1] * MOUSE_SENS * dt
+        pitch = clamp(pitch, -10, 60)
+
+    camera.rotation = Vec3(pitch, yaw, 0)
+    cam_target = player.position + Vec3(0, CAM_HEIGHT, 0)
+    camera.position = cam_target - camera.forward * CAM_DIST
+    camera.look_at(cam_target)
+
+    forward = Vec3(camera.forward.x, 0, camera.forward.z).normalized()
+    right = Vec3(camera.right.x, 0, camera.right.z).normalized()
+
+    move = Vec3(0, 0, 0)
+    if held_keys['w']: move += forward
+    if held_keys['s']: move -= forward
+    if held_keys['a']: move -= right
+    if held_keys['d']: move += right
+    if move.length() > 0:
+        move = move.normalized()
+
+    if is_dashing:
+        player.position += dash_dir * DASH_SPEED * dt
+        dash_time -= dt
+        if dash_time <= 0:
+            is_dashing = False
+            dash_cooldown = DASH_COOLDOWN
+    else:
+        player.position += move * SPEED * dt
+        if dash_cooldown > 0:
+            dash_cooldown -= dt
+
+    ray = raycast(player.position + Vec3(0, 0.1, 0), Vec3(0, -1, 0), distance=0.1, ignore=[player])
+    is_grounded = ray.hit
+
+    if not is_grounded:
+        velocity_y -= GRAVITY * dt
+    else:
+        velocity_y = max(0, velocity_y)
+
+    player.position += Vec3(0, velocity_y * dt, 0)
+    player.rotation_y = lerp_angle(player.rotation_y, camera.rotation_y + 180, 8 * dt)
 app.run()
